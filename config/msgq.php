@@ -5,7 +5,7 @@ return array(
 		'type'			=> 'redis',	// redis | activemq
 		'connection'	=> array(
 			'hostname'	=> '127.0.0.1',
-			'port'		=> '6379,
+			'port'		=> '6379',
 		),
 		'queue'			=> 'queue_name',
 	),
@@ -29,7 +29,7 @@ return array(
 		'type'			=> 'redis',	// redis | activemq
 		'connection'	=> array(
 			'hostname'	=> '127.0.0.1',
-			'port'		=> '6379,
+			'port'		=> '6379',
 		),
 		'queue'			=> 'distribute',
 	),

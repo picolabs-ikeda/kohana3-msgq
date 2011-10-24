@@ -198,8 +198,12 @@ abstract class Kohana_MsgQ {
 				));
 		}
 
+		if (!is_array($arguments)) {
+			$arguments = array($arguments);
+		}
 		try {
-			return call_user_func(array($this->_connection, $name),
+			return call_user_func_array(
+								array($this->_connection, $name),
 								  $arguments);
 		} catch (Exception $e) {
 			throw new MsgQ_Exception(':error',

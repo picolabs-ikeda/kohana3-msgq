@@ -21,8 +21,9 @@ class Kohana_MsgQ_Redis extends MsgQ {
 	 */
 	public function connect() {
 		try {
-			$this->_connection = KVS::instance('msgq',
-										$this->_config['connection']);
+			$this->_connection = KVS::instance(NULL,
+										$this->_config);
+			$this->_connection->connect();
 		} catch (KVS_Exception $e) {
 			throw new MsgQ_Exception(
 					'Connection failed: :message',
@@ -108,22 +109,25 @@ class Kohana_MsgQ_Redis extends MsgQ {
 	/**
 	 * Send message to Queue / Channel.
 	 *
-	 * @param	string		message payload
+	 * @param	string		workload
 	 * @param	string		queue / channel name.
 	 * @param	array		runtime options
 	 * @return	this instance
 	 * @throw	MsgQ_Exception
 	 */
-	public function send($message, $queue = NULL, $options = NULL) {
+	public function send($workload, $queue = NULL, $options = NULL) {
 		if (!$queue) $queue = $this->_config['queue'];
+
 		try {
-			$this->_connection->publish($queue, $message);
+			$this->_connection->publish($queue, $workload);
 		} catch (KVS_Exception $e) {
 			throw new MsgQ_Exception(
-						"Can't send message to :queue . : :message",
+						"Can't send message(:workload) to ':queue'.".
+						": :error",
 						array(
 							':queue'	=> $queue,
-							':message'	=> $e->getMessage(),
+							':workload'	=> $workload,
+							':error'	=> $e->getMessage(),
 						), $e->getCode());
 		}
 		return $this;
