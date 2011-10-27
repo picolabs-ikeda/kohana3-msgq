@@ -1,5 +1,33 @@
 <?php defined('SYSPATH') or die('No direct access allowed.');
 
+/*
+ * 2011/10/25 発見
+ *
+ * Redis のsubscribe()は "wait" する!!!
+ *
+ * なので、モジュールの作りをRedisお作法に乗っ取る形
+ * つまり subscribe() -> データが来たらコールバック
+ * という形に ActiveMQ ドライバを書き換える必要がある!!!
+ *
+ * あとRedisのsubscribe()はタイムアウトするのでini_setが必要。
+ *
+ * Example:
+ *
+ * [Publisher]
+ * 	  $msgq = MsgQ::instance("publisher");
+ *	  $msgq->connect()->send($workload);
+ *
+ * [Subscriber]
+ *    function workload_receiver($msgqobj, $queuename, $workload) {
+ *                  :
+ *                  :
+ *    }
+ *
+ *    $msgq = MsgQ::instance("subscriber");
+ *    $msgq->connect()->subscribe("workload_receiver");
+ *
+ */
+
 /**
  *
  * MsgQ connection wrapper/helper.
@@ -52,7 +80,7 @@ abstract class Kohana_MsgQ {
 	}
 
 	protected	$_instance;
-	protected	$_connection;
+	protected	$_engine;
 	protected	$_config;
 
 	/**
@@ -124,7 +152,9 @@ abstract class Kohana_MsgQ {
 	 * @throws	MsgQ_Exception
 	 * @return	mixed
 	 */
-	abstract public function subscribe($queue = NULL, $options = NULL);
+	abstract public function subscribe($callback,
+									   $queue = NULL,
+									   $options = NULL);
 
 	/**
 	 * Unsubscribe from Message Queue / Channel.
@@ -150,51 +180,15 @@ abstract class Kohana_MsgQ {
 								  $queue = NULL,
 								  $options = NULL);
 
-	/**
-	 * Check a message in Message Queue / Channel
-	 *
-	 * @param	string		queue
-	 * @param	array		runtime options
-	 * @throws	MsgQ_Exception
-	 * @return	boolean
-	 */
-	abstract public function hasMessage(
-								  $queue = NULL,
-								  $options = NULL);
-
-	/**
-	 * Read a message from Message Queue / Channel
-	 *
-	 * @param	string		queue
-	 * @param	array		runtime options
-	 * @throws	MsgQ_Exception
-	 * @return	boolean
-	 */
-	abstract public function readMessage(
-								  $queue = NULL,
-								  $options = NULL);
-
-	/**
-	 * Remove message from Message Queue / Channel
-	 *
-	 * @param	string		queue
-	 * @param	array		runtime options
-	 * @throws	MsgQ_Exception
-	 * @return	boolean
-	 */
-	abstract public function ack(
-								  $queue = NULL,
-								  $options = NULL);
-
 	/** --------------------------------------------------------
 	 * Magic Methods.
 	 */
 	public function __call($name, $arguments) {
-		if (!method_exists($this->_connection, $name)) {
+		if (!method_exists($this->_engine, $name)) {
 			throw new MsgQ_Exception(
 					'Unknown method :name on :driver driver.',
 					array(':name'	=> $name,
-						  ':driver'	=> get_class($this->_connection),
+						  ':driver'	=> get_class($this->_engine),
 				));
 		}
 
@@ -203,8 +197,8 @@ abstract class Kohana_MsgQ {
 		}
 		try {
 			return call_user_func_array(
-								array($this->_connection, $name),
-								  $arguments);
+									array($this->_engine, $name),
+									$arguments);
 		} catch (Exception $e) {
 			throw new MsgQ_Exception(':error',
 					array(':error'	=> $e->getMessage()),

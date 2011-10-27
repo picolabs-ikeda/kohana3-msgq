@@ -10,6 +10,8 @@
  */
 
 class Kohana_MsgQ_ActiveMQ extends MsgQ {
+	const	DEFAULT_ITERATE = 30;
+
 	protected $_readedMessage = null;
 
 	/**
@@ -25,6 +27,12 @@ class Kohana_MsgQ_ActiveMQ extends MsgQ {
 			throw new MsgQ_Exception('Stomp Extension not loaded!');
 		}
 		parent::_construct($name, $config);
+
+		if (!isset($this->_config['iterate']) ||
+			intval($this->_config['iterate']) <= 0) {
+			$this->_config['iterate'] = self::DEFAULT_ITERATE;
+		}
+
 	}
 
 	/**
@@ -36,7 +44,7 @@ class Kohana_MsgQ_ActiveMQ extends MsgQ {
 	public function connect() {
 		$uri = $this->getServerUri();
 		try {
-			$this->_connection = new \Stomp($uri);
+			$this->_engine = new \Stomp($uri);
 		} catch (StompException $e) {
 			throw new MsgQ_Exception(
 					'Connection failed: :message',
@@ -53,8 +61,8 @@ class Kohana_MsgQ_ActiveMQ extends MsgQ {
 	 * @throw	MsgQ_Exception
 	 */
 	public function disconnect() {
-		unset($this->_connection);
-		$this->_connection = null;
+		unset($this->_engine);
+		$this->_engine = null;
 		parent::disconnect();
 
 		return TRUE;
@@ -73,12 +81,14 @@ class Kohana_MsgQ_ActiveMQ extends MsgQ {
 	/**
 	 * Subscribe to Message Queue / Channel.
 	 *
+	 * @param	mixed		callback function
 	 * @param	string		queue / channel name.
 	 * @param	array		runtime options
 	 * @return	this instance
 	 * @throw	MsgQ_Exception
 	 */
-	public function subscribe($queue = NULL, $options = NULL) {
+	public function subscribe($callback,
+							  $queue = NULL, $options = NULL) {
 		$transactionId = NULL;
 		if ($options && is_array($options)) {
 			extract($options + array(
@@ -90,7 +100,7 @@ class Kohana_MsgQ_ActiveMQ extends MsgQ {
 						array('transaction' => $transactionId) : NULL;
 
 		try {
-			$this->_connection->subscribe($queue, $headers);
+			$this->_engine->subscribe($queue, $headers);
 		} catch (StompException $e) {
 			throw new MsgQ_Exception(
 						"Can't subscribe to :queue . : :message",
@@ -99,9 +109,54 @@ class Kohana_MsgQ_ActiveMQ extends MsgQ {
 							':message'	=> $e->getMessage(),
 						), $e->getCode());
 		}
-		return $this;
+
+		$this->_dispatch($callback, $queue, $options);
 	}
 
+	private function _iterate($sleepMicroSeconds) {
+		usleep($sleepMicroSeconds);
+		if (function_exists('gc_collect_cycles')) {
+			gc_collect_cycles();
+		}
+		return TRUE;
+	}
+
+	private function _dispatch($callback,
+							   $queue = NULL, $options = NULL) {
+		if (!$queue) $queue = $this->_config['queue'];
+
+		// sleep seconds -> microseconds;
+		$iteratesec = $this->_config['iterate'] * 1000000;
+
+		$is_continue = TRUE;
+		while ($is_continue) {
+			if (!$this->_engine->hasFrame()) {
+				$this->_iterate($iteratesec);
+				continue;
+			}
+
+			try {
+				$frame = $this->_engine->readFrame();
+			} catch (Exception $e) {
+				$is_continue = FALSE;
+				break;
+			}
+
+			try {
+				$status = call_user_func_array($callback, array(
+												$this, queue, $frame));
+				$this->_engine->ack($frame);
+			} catch (Exception $e) {
+				$this->_engine->rollback($frame);
+			}
+
+			if ($status === FALSE) {
+				$is_continue = FALSE;
+				break;
+			}
+		}
+	}
+							
 	/**
 	 * Unsubscribe from Message Queue / Channel.
 	 *
@@ -122,7 +177,7 @@ class Kohana_MsgQ_ActiveMQ extends MsgQ {
 						array('transaction' => $transactionId) : NULL;
 
 		try {
-			$this->_connection->unsubscribe($queue, $headers);
+			$this->_engine->unsubscribe($queue, $headers);
 		} catch (StompException $e) {
 			throw new MsgQ_Exception(
 						"Can't unsubscribe from :queue . : :message",
@@ -155,7 +210,7 @@ class Kohana_MsgQ_ActiveMQ extends MsgQ {
 						array('transaction' => $transactionId) : NULL;
 
 		try {
-			$this->_connection->send($queue, $message, $headers);
+			$this->_engine->send($queue, $message, $headers);
 		} catch (StompException $e) {
 			throw new MsgQ_Exception(
 						"Can't send message to :queue . : :message",
@@ -165,108 +220,6 @@ class Kohana_MsgQ_ActiveMQ extends MsgQ {
 						), $e->getCode());
 		}
 		return $this;
-	}
-
-	/**
-	 * Check a message in message to Queue / Channel.
-	 *
-	 * @param	string		queue / channel name.
-	 * @param	array		runtime options
-	 * @throw	MsgQ_Exception
-	 * @return	boolean
-	 */
-	public function hasMessage($queue = NULL, $options = NULL) {
-	/*
-		$transactionId = NULL;
-		if ($options && is_array($options)) {
-			extract($options + array(
-										'transactionId'	=> NULL,
-									));
-		}
-		$headers = $transactionId ?
-						array('transaction' => $transactionId) : NULL;
-	*/
-		if (!$queue) $queue = $this->_config['queue'];
-		try {
-			$status = $this->_connection->hasFrame();
-		} catch (StompException $e) {
-			throw new MsgQ_Exception(
-						"Can't send message to :queue . : :message",
-						array(
-							':queue'	=> $queue,
-							':message'	=> $e->getMessage(),
-						), $e->getCode());
-			return FALSE;
-		}
-		return $status;
-	}
-
-	/**
-	 * Read a message from message to Queue / Channel.
-	 *
-	 * @param	string		queue / channel name.
-	 * @param	array		runtime options
-	 * @throw	MsgQ_Exception
-	 * @return	string
-	 */
-	public function readMessage($queue = NULL, $options = NULL) {
-/*
-		$transactionId = NULL;
-		if ($options && is_array($options)) {
-			extract($options + array(
-										'transactionId'	=> NULL,
-									));
-		}
-		$headers = $transactionId ?
-						array('transaction' => $transactionId) : NULL;
-*/
-		if (!$queue) $queue = $this->_config['queue'];
-		try {
-			$this->_readedMessage = $this->_connection->readFrame();
-		} catch (StompException $e) {
-			throw new MsgQ_Exception(
-						"Can't send message to :queue . : :message",
-						array(
-							':queue'	=> $queue,
-							':message'	=> $e->getMessage(),
-						), $e->getCode());
-			return NULL;
-		}
-		return $this->_readedMessage;
-	}
-
-	/**
-	 * Remove message from message to Queue / Channel.
-	 *
-	 * @param	string		queue / channel name.
-	 * @param	array		runtime options
-	 * @throw	MsgQ_Exception
-	 * @return	string
-	 */
-	public function ack($queue = NULL, $options = NULL) {
-		$ack_message = NULL;
-		$transactionId = NULL;
-		if ($options && is_array($options)) {
-			extract($options + array(
-										'transactionId'	=> NULL,
-										'ack_message'	=> NULL,
-									));
-		}
-
-		if (!$queue) $queue = $this->_config['queue'];
-		if (!$ack_message) $ack_message = $this->_readedMessage;
-		try {
-			$this->_connection->ack($ack_message, $transactionId);
-		} catch (StompException $e) {
-			throw new MsgQ_Exception(
-						"Can't send message to :queue . : :message",
-						array(
-							':queue'	=> $queue,
-							':message'	=> $e->getMessage(),
-						), $e->getCode());
-			return NULL;
-		}
-		return $message;
 	}
 }
 ?>
